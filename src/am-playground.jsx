@@ -205,31 +205,57 @@ const FONT = "'SF Pro Display', -apple-system, Inter, system-ui, sans-serif";
 function useLoop(drawRef) {
   const ref = useRef(null);
   useEffect(() => {
-    const cv = ref.current;
-    if (!cv) return;
-    const box = cv.parentElement;
     let raf = 0;
     const frame = () => {
-      const w = box.clientWidth, h = box.clientHeight;
-      if (w > 0 && h > 0 && drawRef.current) {
-        const dpr = window.devicePixelRatio || 1;
-        if (cv.width !== Math.round(w * dpr)) {
-          cv.width = Math.round(w * dpr);
-          cv.height = Math.round(h * dpr);
-          cv.style.width = w + "px";
-          cv.style.height = h + "px";
-        }
-        const ctx = cv.getContext("2d");
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        ctx.clearRect(0, 0, w, h);
-        drawRef.current(ctx, w, h);
-      }
       raf = requestAnimationFrame(frame);
+      const cv = ref.current;                 // re-read: the node can be replaced
+      if (!cv || !drawRef.current) return;
+      const box = cv.parentElement;
+      if (!box) return;
+      const w = box.clientWidth, h = box.clientHeight;
+      if (w <= 0 || h <= 0) return;           // panel is collapsed
+      const dpr = window.devicePixelRatio || 1;
+      if (cv.width !== Math.round(w * dpr)) {
+        cv.width = Math.round(w * dpr);
+        cv.height = Math.round(h * dpr);
+        cv.style.width = w + "px";
+        cv.style.height = h + "px";
+      }
+      const ctx = cv.getContext("2d");
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+      drawRef.current(ctx, w, h);
     };
     raf = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(raf);
   }, [drawRef]);
   return ref;
+}
+
+/* Defined at module scope on purpose. Declaring this inside the component
+   makes it a new component type every render, so React would tear the
+   canvas down and rebuild it sixty times a second. */
+function Plot({ open, title, legend, height, cref }) {
+  return (
+    <div className={open ? "wrap open" : "wrap"} aria-hidden={!open}>
+      <section className="panel">
+        <header className="p-head">
+          <h2>{title}</h2>
+          <ul className="legend">
+            {legend.map((l) => (
+              <li key={l.label}>
+                <span className="sw" style={l.dash
+                  ? { borderTop: `2px dashed ${l.color}` }
+                  : { background: l.color, height: 3 }} />
+                {l.label}
+              </li>
+            ))}
+          </ul>
+        </header>
+        <div className="plot" style={{ height }}><canvas ref={cref} /></div>
+      </section>
+    </div>
+  );
 }
 
 const rectOf = (w, h) => ({
@@ -446,27 +472,24 @@ export default function AmLesson() {
   const view = useRef({});
   view.current = { sig, count, off, params, over, periods };
 
-  const mkDraw = (fn) => {
-    const r = useRef(fn);
-    r.current = fn;
-    return r;
-  };
-
-  const drawMsg = mkDraw((ctx, w, h) => {
+  const drawMsg = useRef(null);
+  drawMsg.current = (ctx, w, h) => {
     const { sig, count, off } = view.current;
     const r = rectOf(w, h);
     field(ctx, w, h, r); midline(ctx, r); yTicks(ctx, r, 1.05);
     trace(ctx, r, sig.msg, count, off, 1.05, C.message, 2.4);
-  });
+  };
 
-  const drawCar = mkDraw((ctx, w, h) => {
+  const drawCar = useRef(null);
+  drawCar.current = (ctx, w, h) => {
     const { sig, count, off } = view.current;
     const r = rectOf(w, h);
     field(ctx, w, h, r); midline(ctx, r); yTicks(ctx, r, 1.05);
     trace(ctx, r, sig.car, count, off, 1.05, C.carrier, 1.4);
-  });
+  };
 
-  const drawMod = mkDraw((ctx, w, h) => {
+  const drawMod = useRef(null);
+  drawMod.current = (ctx, w, h) => {
     const { sig, count, off, params, over } = view.current;
     const r = rectOf(w, h);
     const range = 1 + Math.max(params.m, 0.2) + 0.2;
@@ -482,9 +505,10 @@ export default function AmLesson() {
     trace(ctx, r, sig.sig, count, off, range, C.carrier, 1.2);
     trace(ctx, r, sig.env, count, off, range, C.envelope, 2, [6, 5]);
     trace(ctx, r, sig.envNeg, count, off, range, C.envelope, 2, [6, 5]);
-  });
+  };
 
-  const drawSpec = mkDraw((ctx, w, h) => {
+  const drawSpec = useRef(null);
+  drawSpec.current = (ctx, w, h) => {
     const { sig, params } = view.current;
     const r = rectOf(w, h);
     field(ctx, w, h, r);
@@ -521,43 +545,23 @@ export default function AmLesson() {
     ctx.fillStyle = C.tick;
     for (let f = 0; f <= F_VIEW; f += 20) ctx.fillText(String(f), fx(f) - 7, r.y + r.h + 17);
     ctx.fillText("Hz", r.x + r.w - 18, r.y + r.h + 17);
-  });
+  };
 
-  const drawRec = mkDraw((ctx, w, h) => {
+  const drawRec = useRef(null);
+  drawRec.current = (ctx, w, h) => {
     const { sig, count, off, over } = view.current;
     const r = rectOf(w, h);
     const range = over ? 1.7 : 1.05;
     field(ctx, w, h, r); midline(ctx, r); yTicks(ctx, r, range);
     trace(ctx, r, sig.msg, count, off, range, C.message, 1.5, [5, 5]);
     trace(ctx, r, sig.rec, count, off, range, C.recovered, 2.4);
-  });
+  };
 
   const refMsg = useLoop(drawMsg);
   const refCar = useLoop(drawCar);
   const refMod = useLoop(drawMod);
   const refSpec = useLoop(drawSpec);
   const refRec = useLoop(drawRec);
-
-  const Plot = ({ id, title, legend, height, cref }) => (
-    <div className={show.includes(id) ? "wrap open" : "wrap"} aria-hidden={!show.includes(id)}>
-      <section className="panel">
-        <header className="p-head">
-          <h2>{title}</h2>
-          <ul className="legend">
-            {legend.map((l) => (
-              <li key={l.label}>
-                <span className="sw" style={l.dash
-                  ? { borderTop: `2px dashed ${l.color}` }
-                  : { background: l.color, height: 3 }} />
-                {l.label}
-              </li>
-            ))}
-          </ul>
-        </header>
-        <div className="plot" style={{ height }}><canvas ref={cref} /></div>
-      </section>
-    </div>
-  );
 
   return (
     <div className="app">
@@ -764,15 +768,15 @@ export default function AmLesson() {
               detector folds those troughs back up. That information cannot be recovered.
             </p>
           )}
-          <Plot id="msg" title="Message" height={150} cref={refMsg}
+          <Plot open={show.includes("msg")} title="Message" height={150} cref={refMsg}
             legend={[{ label: "m(t)", color: C.message }]} />
-          <Plot id="car" title="Carrier" height={150} cref={refCar}
+          <Plot open={show.includes("car")} title="Carrier" height={150} cref={refCar}
             legend={[{ label: "cos(2π·fc·t)", color: C.carrier }]} />
-          <Plot id="mod" title="Modulated signal" height={252} cref={refMod}
+          <Plot open={show.includes("mod")} title="Modulated signal" height={252} cref={refMod}
             legend={[{ label: "s(t)", color: C.carrier }, { label: "envelope", color: C.envelope, dash: true }]} />
-          <Plot id="spec" title="Spectrum" height={210} cref={refSpec}
+          <Plot open={show.includes("spec")} title="Spectrum" height={210} cref={refSpec}
             legend={[{ label: "carrier and sidebands", color: C.spike }, { label: "noise floor", color: C.bars }]} />
-          <Plot id="rec" title="Recovered message" height={172} cref={refRec}
+          <Plot open={show.includes("rec")} title="Recovered message" height={172} cref={refRec}
             legend={[{ label: "sent", color: C.message, dash: true }, { label: "detected", color: C.recovered }]} />
         </div>
       </div>
