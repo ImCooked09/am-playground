@@ -1,18 +1,22 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from "react";
 
 /* ==================================================================
-   AM Modulation Playground — TC-307 Communication Systems
+   How AM Radio Works — an eleven-step walkthrough
 
    s(t) = [1 + m·cos(2π·fm·t)] · cos(2π·fc·t)
 
-   Chain: build -> add noise -> FFT -> rectify + low-pass (detector)
+   Two modes. Lesson walks through the idea one animated step at a
+   time; Explore hands over every control. Each lesson step declares
+   target parameters, and moving between steps tweens toward them, so
+   the animation IS the explanation rather than decoration on top.
    ================================================================== */
 
-const FS = 2048;                 // sample rate, Hz
-const N = 8192;                  // 4.0 s buffer -> FFT bin = 0.25 Hz
+const FS = 2048;
+const N = 8192;                  // 4 s buffer -> FFT bin = 0.25 Hz
 const BIN = FS / N;
-const F_VIEW = 110;              // spectrum axis limit, Hz
-const PAD = { l: 40, r: 12, t: 12, b: 22 };
+const F_VIEW = 110;
+const PAD = { l: 42, r: 14, t: 14, b: 24 };
+const TWEEN_MS = 1500;
 
 /* ---------------- DSP ---------------- */
 
@@ -55,8 +59,9 @@ function mulberry32(seed) {
   };
 }
 
-function buildSignals(fc, fm, m, snrDb, seed) {
+function buildSignals({ fc, fm, m, snr }, seed, needSpectrum) {
   const msg = new Float32Array(N);
+  const car = new Float32Array(N);
   const env = new Float32Array(N);
   const envNeg = new Float32Array(N);
   const sig = new Float32Array(N);
@@ -65,14 +70,15 @@ function buildSignals(fc, fm, m, snrDb, seed) {
   for (let n = 0; n < N; n++) {
     const t = n / FS;
     const mv = Math.cos(2 * Math.PI * fm * t);
+    const cv = Math.cos(2 * Math.PI * fc * t);
     const ev = 1 + m * mv;
-    const s = ev * Math.cos(2 * Math.PI * fc * t);
-    msg[n] = mv; env[n] = ev; envNeg[n] = -ev; sig[n] = s;
+    const s = ev * cv;
+    msg[n] = mv; car[n] = cv; env[n] = ev; envNeg[n] = -ev; sig[n] = s;
     power += s * s;
   }
   power /= N;
 
-  const sigma = Math.sqrt(power / Math.pow(10, snrDb / 10));
+  const sigma = Math.sqrt(power / Math.pow(10, snr / 10));
   if (sigma > 1e-9) {
     const rnd = mulberry32(seed);
     for (let n = 0; n < N; n += 2) {
@@ -83,15 +89,18 @@ function buildSignals(fc, fm, m, snrDb, seed) {
     }
   }
 
-  const re = new Float64Array(N), im = new Float64Array(N);
-  for (let n = 0; n < N; n++) re[n] = sig[n];
-  fft(re, im);
-  const bins = Math.ceil(F_VIEW / BIN) + 1;
-  const spec = new Float32Array(bins);
-  for (let k = 0; k < bins; k++) spec[k] = (2 * Math.hypot(re[k], im[k])) / N;
+  /* The FFT is the expensive part, so skip it whenever the spectrum
+     panel is hidden. During a tween this runs every frame. */
+  let spec = null;
+  if (needSpectrum) {
+    const re = new Float64Array(N), im = new Float64Array(N);
+    for (let n = 0; n < N; n++) re[n] = sig[n];
+    fft(re, im);
+    const bins = Math.ceil(F_VIEW / BIN) + 1;
+    spec = new Float32Array(bins);
+    for (let k = 0; k < bins; k++) spec[k] = (2 * Math.hypot(re[k], im[k])) / N;
+  }
 
-  // Envelope detector: rectify, one-pole low-pass, strip DC.
-  // Cutoff at sqrt(fm*fc) always satisfies 1/fc << RC << 1/fm.
   const fCut = Math.sqrt(Math.max(fm, 0.5) * fc);
   const a = 1 - Math.exp((-2 * Math.PI * fCut) / FS);
   const rec = new Float32Array(N);
@@ -104,62 +113,126 @@ function buildSignals(fc, fm, m, snrDb, seed) {
   const scale = Math.PI / (2 * Math.max(m, 0.05));
   for (let n = 0; n < N; n++) rec[n] = (rec[n] - mean) * scale;
 
-  return { msg, env, envNeg, sig, rec, spec };
+  return { msg, car, env, envNeg, sig, rec, spec };
 }
+
+/* ---------------- the lesson ---------------- */
+
+const LESSON = [
+  {
+    id: "message", title: "The message",
+    body: "This slow wave is what you want to send — a voice, some music, data. On its own it cannot travel. Radiating a 3 kHz signal directly would need an antenna around 100 km long.",
+    p: { fc: 40, fm: 4, m: 0.35, snr: 50 }, show: ["msg"],
+  },
+  {
+    id: "carrier", title: "So borrow a faster wave",
+    body: "A carrier oscillates far more quickly, and a fast wave needs only a short antenna. It can travel anywhere. It just carries nothing yet.",
+    p: { fc: 40, fm: 4, m: 0.35, snr: 50 }, show: ["msg", "car"],
+  },
+  {
+    id: "ride", title: "Ride one on the other",
+    body: "Let the message control the carrier's height. Where the message rises the carrier grows tall; where it dips the carrier shrinks. Its frequency never changes — only the amplitude.",
+    p: { fc: 40, fm: 4, m: 0.35, snr: 50 }, show: ["mod"],
+  },
+  {
+    id: "envelope", title: "The outline is the message",
+    body: "Trace the peaks of the carrier and the message comes straight back. That outline is called the envelope, and the whole of AM is this single idea: hide the message in the envelope.",
+    p: { fc: 40, fm: 4, m: 0.35, snr: 50 }, show: ["mod"],
+  },
+  {
+    id: "index", title: "How deep to go",
+    body: "The modulation index m sets the depth. At 0.35 the envelope barely breathes. Watch it open up as m climbs toward 1.",
+    p: { fc: 40, fm: 4, m: 0.95, snr: 50 }, show: ["mod"],
+  },
+  {
+    id: "over", title: "Push it too far",
+    body: "Past m = 1 the envelope crosses zero and the carrier flips phase. A receiver cannot tell a flip from a dip, so it folds those troughs back upward. The information in them is gone for good.",
+    p: { fc: 40, fm: 4, m: 1.35, snr: 50 }, show: ["mod", "rec"],
+    predict: {
+      q: "Before it happens — what do you think the recovered message will do?",
+      options: ["Just get louder", "Flatten off at the peaks", "Grow extra humps where the troughs were"],
+      answer: 2,
+      note: "The detector can only measure size, not sign, so a negative envelope comes back positive.",
+    },
+  },
+  {
+    id: "spectrum", title: "Only three frequencies leave",
+    body: "Multiply the two cosines and the product identity splits them into exactly three: the carrier in the middle, and one sideband either side at fc + fm and fc − fm. Nothing else is transmitted.",
+    p: { fc: 40, fm: 4, m: 0.7, snr: 50 }, show: ["mod", "spec"],
+  },
+  {
+    id: "bandwidth", title: "How much room it needs",
+    body: "Raise the message frequency and the two sidebands slide outward. The gap between them is the bandwidth, and it always works out to twice the message frequency.",
+    p: { fc: 40, fm: 10, m: 0.7, snr: 50 }, show: ["spec"],
+    predict: {
+      q: "Raise the message frequency. What do the sidebands do?",
+      options: ["Move closer together", "Slide further apart", "Stay put and grow taller"],
+      answer: 1,
+      note: "They sit at fc ± fm, so raising fm pushes them out symmetrically.",
+    },
+  },
+  {
+    id: "cost", title: "What the carrier costs you",
+    body: "The middle spike is the tallest by far, and it carries no information at all. Only the sidebands do. Even at m = 1, barely a third of your transmitter power does useful work — which is exactly why single sideband exists.",
+    p: { fc: 40, fm: 6, m: 1.0, snr: 50 }, show: ["spec"],
+  },
+  {
+    id: "noise", title: "Then the channel gets in the way",
+    body: "Real links add noise. Watch where it shows up first: the spectrum floor lifts long before the waveform looks damaged. This is why engineers watch spectra rather than waveforms.",
+    p: { fc: 40, fm: 6, m: 0.7, snr: 7 }, show: ["mod", "spec"],
+  },
+  {
+    id: "recover", title: "Getting it back",
+    body: "The receiver rectifies the signal, low-passes away the carrier ripple, and drops the DC. If the green curve lands on the blue one, the link worked.",
+    p: { fc: 40, fm: 5, m: 0.7, snr: 30 }, show: ["mod", "rec"],
+  },
+];
 
 /* ---------------- palette ---------------- */
 
 const C = {
-  paper: "#f8f6f0",
-  grid: "#e3dfd2",
-  rule: "#b9b19c",
-  tick: "#8c8471",
-  message: "#2f6491",
-  carrier: "#243740",
-  envelope: "#a52a6d",
-  bars: "#6d8fa3",
-  spike: "#b57a10",
-  recovered: "#1d6f5b",
-  hair: "#3f5259",
+  paper: "#f8f6f0", grid: "#e3dfd2", rule: "#b9b19c", tick: "#8c8471",
+  message: "#2f6491", carrier: "#243740", envelope: "#a52a6d",
+  bars: "#6d8fa3", spike: "#b57a10", recovered: "#1d6f5b",
 };
+const FONT = "'SF Pro Display', -apple-system, Inter, system-ui, sans-serif";
 
 /* ---------------- canvas ---------------- */
 
-function usePlot(draw, deps) {
+/* One rAF loop per canvas, reading the latest draw function from a ref.
+   Nothing re-subscribes when parameters change, which matters when
+   they change sixty times a second during a tween. */
+function useLoop(drawRef) {
   const ref = useRef(null);
   useEffect(() => {
     const cv = ref.current;
     if (!cv) return;
     const box = cv.parentElement;
     let raf = 0;
-    const render = () => {
+    const frame = () => {
       const w = box.clientWidth, h = box.clientHeight;
-      if (!w || !h) return;
-      const dpr = window.devicePixelRatio || 1;
-      if (cv.width !== Math.round(w * dpr)) {
-        cv.width = Math.round(w * dpr);
-        cv.height = Math.round(h * dpr);
-        cv.style.width = w + "px";
-        cv.style.height = h + "px";
+      if (w > 0 && h > 0 && drawRef.current) {
+        const dpr = window.devicePixelRatio || 1;
+        if (cv.width !== Math.round(w * dpr)) {
+          cv.width = Math.round(w * dpr);
+          cv.height = Math.round(h * dpr);
+          cv.style.width = w + "px";
+          cv.style.height = h + "px";
+        }
+        const ctx = cv.getContext("2d");
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, w, h);
+        drawRef.current(ctx, w, h);
       }
-      const ctx = cv.getContext("2d");
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.clearRect(0, 0, w, h);
-      draw(ctx, w, h);
+      raf = requestAnimationFrame(frame);
     };
-    render();
-    const ro = new ResizeObserver(() => {
-      cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(render);
-    });
-    ro.observe(box);
-    return () => { ro.disconnect(); cancelAnimationFrame(raf); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, deps);
+    raf = requestAnimationFrame(frame);
+    return () => cancelAnimationFrame(raf);
+  }, [drawRef]);
   return ref;
 }
 
-const rect = (w, h) => ({
+const rectOf = (w, h) => ({
   x: PAD.l, y: PAD.t,
   w: Math.max(10, w - PAD.l - PAD.r),
   h: Math.max(10, h - PAD.t - PAD.b),
@@ -184,19 +257,14 @@ function field(ctx, w, h, r) {
   ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w, r.h);
 }
 
-function yTicks(ctx, r, range, labels) {
+function yTicks(ctx, r, range) {
   ctx.fillStyle = C.tick;
-  ctx.font = "11px 'SF Pro Display', -apple-system, Inter, system-ui, sans-serif";
+  ctx.font = `12px ${FONT}`;
   ctx.textAlign = "right";
   ctx.textBaseline = "middle";
-  ctx.strokeStyle = C.rule;
-  labels.forEach((v) => {
+  [-1, 0, 1].forEach((v) => {
     const y = r.y + r.h / 2 - (v / range) * (r.h / 2 - 4);
     ctx.fillText(String(v), r.x - 7, y);
-    ctx.beginPath();
-    ctx.moveTo(r.x - 3, Math.round(y) + 0.5);
-    ctx.lineTo(r.x, Math.round(y) + 0.5);
-    ctx.stroke();
   });
   ctx.textAlign = "left";
   ctx.textBaseline = "alphabetic";
@@ -214,9 +282,7 @@ function midline(ctx, r) {
 
 function trace(ctx, r, data, count, off, range, color, lw, dash) {
   ctx.save();
-  ctx.beginPath();
-  ctx.rect(r.x, r.y, r.w, r.h);
-  ctx.clip();
+  ctx.beginPath(); ctx.rect(r.x, r.y, r.w, r.h); ctx.clip();
   ctx.strokeStyle = color;
   ctx.lineWidth = lw;
   ctx.lineJoin = "round";
@@ -233,560 +299,483 @@ function trace(ctx, r, data, count, off, range, color, lw, dash) {
   ctx.restore();
 }
 
-function crosshair(ctx, r, hx, lines) {
-  if (hx == null) return;
-  const x = Math.round(hx) + 0.5;
-  ctx.save();
-  ctx.strokeStyle = C.hair;
-  ctx.globalAlpha = 0.45;
-  ctx.setLineDash([3, 3]);
-  ctx.beginPath();
-  ctx.moveTo(x, r.y); ctx.lineTo(x, r.y + r.h);
-  ctx.stroke();
-  ctx.restore();
-
-  ctx.font = "11px 'SF Pro Display', -apple-system, Inter, system-ui, sans-serif";
-  ctx.textBaseline = "top";
-  const wBox = Math.max(...lines.map((t) => ctx.measureText(t).width)) + 14;
-  const hBox = lines.length * 14 + 9;
-  const bx = Math.min(x + 9, r.x + r.w - wBox - 3);
-  const by = r.y + 5;
-  ctx.fillStyle = "rgba(30,48,56,0.93)";
-  ctx.fillRect(bx, by, wBox, hBox);
-  ctx.fillStyle = "#f2efe6";
-  lines.forEach((t, i) => ctx.fillText(t, bx + 7, by + 5 + i * 14));
-  ctx.textBaseline = "alphabetic";
-}
-
-/* ---------------- panel shell ---------------- */
-
-function Panel({ title, sub, legend, hint, height, canvasRef, onPointerMove, onPointerLeave, onPointerDown, grab, feature }) {
-  return (
-    <section className={feature ? "panel panel-feature" : "panel"}>
-      <header className="p-head">
-        <div>
-          <h2>{title}</h2>
-          {sub && <p className="p-sub">{sub}</p>}
-        </div>
-        <div className="p-meta">
-          {hint && <span className="hint">{hint}</span>}
-          {legend && (
-            <ul className="legend">
-              {legend.map((l) => (
-                <li key={l.label}>
-                  <span
-                    className="sw"
-                    style={
-                      l.dash
-                        ? { borderTop: `2px dashed ${l.color}` }
-                        : { background: l.color, height: 3 }
-                    }
-                  />
-                  {l.label}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </header>
-      <div className="plot" style={{ height, cursor: grab || "crosshair" }}>
-        <canvas
-          ref={canvasRef}
-          onPointerMove={onPointerMove}
-          onPointerLeave={onPointerLeave}
-          onPointerDown={onPointerDown}
-        />
-      </div>
-    </section>
-  );
-}
-
 /* ---------------- app ---------------- */
 
-export default function AmPlayground() {
-  const [fc, setFc] = useState(40);
-  const [fm, setFm] = useState(4);
-  const [m, setM] = useState(0.6);
-  const [snr, setSnr] = useState(45);
-  const [periods, setPeriods] = useState(2);
-  const [logScale, setLogScale] = useState(false);
-  const [seed, setSeed] = useState(1234);
-  const [playing, setPlaying] = useState(false);
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+
+function readUrl() {
+  try {
+    const q = new URLSearchParams(window.location.search);
+    if (q.has("fc") || q.has("m")) {
+      return {
+        mode: "explore",
+        p: {
+          fc: clamp(+q.get("fc") || 40, 8, 80),
+          fm: clamp(+q.get("fm") || 4, 1, 12),
+          m: clamp(+q.get("m") || 0.6, 0, 1.6),
+          snr: clamp(+q.get("snr") || 45, 0, 50),
+        },
+      };
+    }
+    if (q.has("step")) {
+      const i = clamp(parseInt(q.get("step"), 10) - 1, 0, LESSON.length - 1);
+      return { mode: "lesson", step: i, p: LESSON[i].p };
+    }
+  } catch (e) { /* sandboxed frame, ignore */ }
+  return null;
+}
+
+export default function AmLesson() {
+  const initial = useMemo(readUrl, []);
+  const [mode, setMode] = useState(initial?.mode || "lesson");
+  const [step, setStep] = useState(initial?.step ?? 0);
+  const [params, setParams] = useState(initial?.p || LESSON[0].p);
+  const [answered, setAnswered] = useState({});
+  const [picked, setPicked] = useState(null);
+  const [running, setRunning] = useState(true);
   const [off, setOff] = useState(0);
-  const [hover, setHover] = useState({ id: null, x: 0 });
+  const [periods, setPeriods] = useState(2);
+  const [seed, setSeed] = useState(1234);
+  const [copied, setCopied] = useState(false);
 
-  const sig = useMemo(() => buildSignals(fc, fm, m, snr, seed), [fc, fm, m, snr, seed]);
+  const paramsRef = useRef(params);
+  paramsRef.current = params;
+  const tween = useRef(null);
+  const runRef = useRef(running);
+  runRef.current = running;
 
-  const count = Math.min(N, Math.max(64, Math.round((periods / fm) * FS)));
-  const span = count / FS;
-  const cycles = Math.round((periods / fm) * fc);
-  const over = m > 1;
-  const eff = (100 * m * m) / (2 + m * m);
+  const lessonStep = LESSON[step];
+  const inLesson = mode === "lesson";
+  const gated = inLesson && lessonStep.predict && !answered[lessonStep.id];
+  const show = inLesson
+    ? lessonStep.show
+    : ["msg", "mod", "spec", "rec"];
+  const needSpec = show.includes("spec");
 
-  /* the buffer holds a whole number of cycles, so wrapping is seamless */
+  const sig = useMemo(
+    () => buildSignals(params, seed, needSpec),
+    [params, seed, needSpec]
+  );
+
+  const count = Math.min(N, Math.max(64, Math.round((periods / params.fm) * FS)));
+  const over = params.m > 1;
+  const eff = (100 * params.m * params.m) / (2 + params.m * params.m);
+
+  /* one master loop: parameter tween plus the scrolling trace */
   useEffect(() => {
-    if (!playing) return;
     let raf = 0;
-    const step = () => {
-      setOff((o) => (o + 5) % N);
-      raf = requestAnimationFrame(step);
+    const loop = (now) => {
+      const tw = tween.current;
+      if (tw) {
+        const t = clamp((now - tw.t0) / tw.ms, 0, 1);
+        const k = ease(t);
+        const mix = (a, b) => a + (b - a) * k;
+        setParams({
+          fc: mix(tw.from.fc, tw.to.fc),
+          fm: mix(tw.from.fm, tw.to.fm),
+          m: mix(tw.from.m, tw.to.m),
+          snr: mix(tw.from.snr, tw.to.snr),
+        });
+        if (t >= 1) tween.current = null;
+      }
+      if (runRef.current) setOff((o) => (o + 4) % N);
+      raf = requestAnimationFrame(loop);
     };
-    raf = requestAnimationFrame(step);
+    raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [playing]);
+  }, []);
 
-  const hoverAt = (id) => (e) => {
-    const b = e.currentTarget.getBoundingClientRect();
-    setHover({ id, x: e.clientX - b.left });
-  };
-  const clearHover = () => setHover({ id: null, x: 0 });
+  const glideTo = useCallback((to) => {
+    tween.current = { from: { ...paramsRef.current }, to, t0: performance.now(), ms: TWEEN_MS };
+  }, []);
 
-  const sampleAt = (id, w) => {
-    if (hover.id !== id) return null;
-    const r = rect(w, 0);
-    const f = (hover.x - r.x) / r.w;
-    if (f < 0 || f > 1) return null;
-    return Math.round(f * (count - 1));
-  };
+  const goStep = useCallback((i) => {
+    const n = clamp(i, 0, LESSON.length - 1);
+    setStep(n);
+    setPicked(null);
+    const s = LESSON[n];
+    if (!s.predict || answered[s.id]) glideTo(s.p);
+  }, [answered, glideTo]);
 
-  /* drag the envelope to change modulation index */
-  const dragIndex = (e) => {
-    const startY = e.clientY, startM = m;
-    const move = (ev) => {
-      const next = startM - (ev.clientY - startY) * 0.0065;
-      setM(Math.min(1.6, Math.max(0, Math.round(next * 100) / 100)));
+  /* keyboard paging */
+  useEffect(() => {
+    const onKey = (e) => {
+      if (!inLesson) return;
+      if (e.key === "ArrowRight") goStep(step + 1);
+      if (e.key === "ArrowLeft") goStep(step - 1);
     };
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-  };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [inLesson, step, goStep]);
 
-  /* drag a spike in the spectrum to retune */
-  const dragSpike = (e) => {
-    const b = e.currentTarget.getBoundingClientRect();
-    const r = rect(b.width, b.height);
-    const toF = (clientX) => ((clientX - b.left - r.x) / r.w) * F_VIEW;
-    const f0 = toF(e.clientX);
-    const targets = [{ k: "fc", f: fc }, { k: "fm", f: fc + fm }, { k: "fm", f: fc - fm }];
-    let best = null, bd = 7;
-    targets.forEach((t) => {
-      const d = Math.abs(t.f - f0);
-      if (d < bd) { bd = d; best = t; }
-    });
-    if (!best) return;
-    const move = (ev) => {
-      const f = toF(ev.clientX);
-      if (best.k === "fc") setFc(Math.min(80, Math.max(8, Math.round(f))));
-      else setFm(Math.min(12, Math.max(1, Math.round(Math.abs(f - fc)))));
-    };
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
+  /* keep the address bar in sync so any view can be linked */
+  useEffect(() => {
+    try {
+      const q = inLesson
+        ? `?step=${step + 1}`
+        : `?fc=${Math.round(params.fc)}&fm=${Math.round(params.fm)}` +
+          `&m=${params.m.toFixed(2)}&snr=${Math.round(params.snr)}`;
+      window.history.replaceState(null, "", q);
+    } catch (e) { /* sandboxed frame, ignore */ }
+  }, [inLesson, step, params]);
+
+  const answer = (i) => {
+    setPicked(i);
+    setAnswered((a) => ({ ...a, [lessonStep.id]: true }));
+    setTimeout(() => glideTo(lessonStep.p), 700);
   };
 
-  /* ---- plots ---- */
+  const share = async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch (e) {
+      setCopied(false);
+    }
+  };
 
-  const modRef = usePlot((ctx, w, h) => {
-    const r = rect(w, h);
-    const range = 1 + Math.max(m, 0.2) + 0.2;
-    field(ctx, w, h, r);
-    midline(ctx, r);
-    yTicks(ctx, r, range, [-1, 0, 1]);
+  const set = (k) => (v) => {
+    tween.current = null;
+    setParams((p) => ({ ...p, [k]: v }));
+  };
 
+  /* ---- draw functions, kept in refs ---- */
+
+  const view = useRef({});
+  view.current = { sig, count, off, params, over, periods };
+
+  const mkDraw = (fn) => {
+    const r = useRef(fn);
+    r.current = fn;
+    return r;
+  };
+
+  const drawMsg = mkDraw((ctx, w, h) => {
+    const { sig, count, off } = view.current;
+    const r = rectOf(w, h);
+    field(ctx, w, h, r); midline(ctx, r); yTicks(ctx, r, 1.05);
+    trace(ctx, r, sig.msg, count, off, 1.05, C.message, 2.4);
+  });
+
+  const drawCar = mkDraw((ctx, w, h) => {
+    const { sig, count, off } = view.current;
+    const r = rectOf(w, h);
+    field(ctx, w, h, r); midline(ctx, r); yTicks(ctx, r, 1.05);
+    trace(ctx, r, sig.car, count, off, 1.05, C.carrier, 1.4);
+  });
+
+  const drawMod = mkDraw((ctx, w, h) => {
+    const { sig, count, off, params, over } = view.current;
+    const r = rectOf(w, h);
+    const range = 1 + Math.max(params.m, 0.2) + 0.2;
+    field(ctx, w, h, r); midline(ctx, r); yTicks(ctx, r, range);
     if (over) {
       ctx.save();
       ctx.beginPath(); ctx.rect(r.x, r.y, r.w, r.h); ctx.clip();
       const k = (r.h / 2 - 4) / range, mid = r.y + r.h / 2;
-      ctx.fillStyle = "rgba(165,42,109,0.08)";
+      ctx.fillStyle = "rgba(165,42,109,0.09)";
       ctx.fillRect(r.x, mid - k, r.w, 2 * k);
       ctx.restore();
     }
+    trace(ctx, r, sig.sig, count, off, range, C.carrier, 1.2);
+    trace(ctx, r, sig.env, count, off, range, C.envelope, 2, [6, 5]);
+    trace(ctx, r, sig.envNeg, count, off, range, C.envelope, 2, [6, 5]);
+  });
 
-    trace(ctx, r, sig.sig, count, off, range, C.carrier, 1.1);
-    trace(ctx, r, sig.env, count, off, range, C.envelope, 1.7, [5, 4]);
-    trace(ctx, r, sig.envNeg, count, off, range, C.envelope, 1.7, [5, 4]);
-
-    ctx.fillStyle = C.tick;
-    ctx.font = "11px 'SF Pro Display', -apple-system, Inter, system-ui, sans-serif";
-    ctx.fillText(`${(span * 1000).toFixed(0)} ms shown`, r.x + 3, r.y + r.h + 15);
-
-    const i = sampleAt("mod", w);
-    if (i != null) {
-      crosshair(ctx, r, r.x + (i / (count - 1)) * r.w, [
-        `t = ${((i / FS) * 1000).toFixed(1)} ms`,
-        `s(t) = ${sig.sig[(off + i) % N].toFixed(3)}`,
-        `envelope = ${sig.env[(off + i) % N].toFixed(3)}`,
-      ]);
-    }
-  }, [sig, count, m, off, hover, over, span]);
-
-  const specRef = usePlot((ctx, w, h) => {
-    const r = rect(w, h);
+  const drawSpec = mkDraw((ctx, w, h) => {
+    const { sig, params } = view.current;
+    const r = rectOf(w, h);
     field(ctx, w, h, r);
-    const floorDb = -70;
-    const toY = (a) => {
-      if (!logScale) return r.y + r.h - Math.min(a / 1.15, 1) * (r.h - 6);
-      const db = 20 * Math.log10(Math.max(a, 1e-9));
-      const f = Math.min(Math.max((db - floorDb) / (6 - floorDb), 0), 1);
-      return r.y + r.h - f * (r.h - 6);
-    };
+    if (!sig.spec) return;
+    const { fc, fm } = params;
     const fx = (f) => r.x + (f / F_VIEW) * r.w;
+    const toY = (a) => r.y + r.h - Math.min(a / 1.15, 1) * (r.h - 8);
 
     for (let k = 0; k < sig.spec.length; k++) {
       const f = k * BIN;
-      const near =
-        Math.abs(f - fc) < 0.6 ||
-        Math.abs(f - (fc + fm)) < 0.6 ||
-        Math.abs(f - (fc - fm)) < 0.6;
+      const near = Math.abs(f - fc) < 0.7 ||
+                   Math.abs(f - (fc + fm)) < 0.7 ||
+                   Math.abs(f - (fc - fm)) < 0.7;
       ctx.strokeStyle = near ? C.spike : C.bars;
-      ctx.lineWidth = near ? 2.4 : 1;
+      ctx.lineWidth = near ? 3 : 1;
       ctx.beginPath();
       ctx.moveTo(fx(f), r.y + r.h);
       ctx.lineTo(fx(f), toY(sig.spec[k]));
       ctx.stroke();
     }
 
-    // bandwidth bracket across the two sidebands
-    const xa = fx(fc - fm), xb = fx(fc + fm), yb = r.y + 18;
-    ctx.strokeStyle = C.spike;
-    ctx.lineWidth = 1;
+    const xa = fx(fc - fm), xb = fx(fc + fm), yb = r.y + 20;
+    ctx.strokeStyle = C.spike; ctx.lineWidth = 1.4;
     ctx.beginPath();
-    ctx.moveTo(xa, yb + 5); ctx.lineTo(xa, yb);
-    ctx.lineTo(xb, yb); ctx.lineTo(xb, yb + 5);
+    ctx.moveTo(xa, yb + 6); ctx.lineTo(xa, yb);
+    ctx.lineTo(xb, yb); ctx.lineTo(xb, yb + 6);
     ctx.stroke();
     ctx.fillStyle = C.spike;
-    ctx.font = "11px 'SF Pro Display', -apple-system, Inter, system-ui, sans-serif";
+    ctx.font = `12px ${FONT}`;
     ctx.textAlign = "center";
-    ctx.fillText(`bandwidth ${2 * fm} Hz`, (xa + xb) / 2, yb - 4);
+    ctx.fillText(`bandwidth ${(2 * fm).toFixed(0)} Hz`, (xa + xb) / 2, yb - 5);
     ctx.textAlign = "left";
 
-    ctx.strokeStyle = C.rule;
     ctx.fillStyle = C.tick;
-    for (let f = 0; f <= F_VIEW; f += 20) {
-      ctx.beginPath();
-      ctx.moveTo(Math.round(fx(f)) + 0.5, r.y + r.h);
-      ctx.lineTo(Math.round(fx(f)) + 0.5, r.y + r.h + 3);
-      ctx.stroke();
-      ctx.fillText(String(f), fx(f) - 6, r.y + r.h + 15);
-    }
-    ctx.fillText("Hz", r.x + r.w - 16, r.y + r.h + 15);
+    for (let f = 0; f <= F_VIEW; f += 20) ctx.fillText(String(f), fx(f) - 7, r.y + r.h + 17);
+    ctx.fillText("Hz", r.x + r.w - 18, r.y + r.h + 17);
+  });
 
-    if (hover.id === "spec") {
-      const f = ((hover.x - r.x) / r.w) * F_VIEW;
-      if (f >= 0 && f <= F_VIEW) {
-        const amp = sig.spec[Math.round(f / BIN)] || 0;
-        crosshair(ctx, r, hover.x, [
-          `f = ${f.toFixed(1)} Hz`,
-          logScale
-            ? `${(20 * Math.log10(Math.max(amp, 1e-9))).toFixed(1)} dB`
-            : `amplitude = ${amp.toFixed(3)}`,
-        ]);
-      }
-    }
-  }, [sig, logScale, fc, fm, hover]);
-
-  const msgRef = usePlot((ctx, w, h) => {
-    const r = rect(w, h);
-    field(ctx, w, h, r);
-    midline(ctx, r);
-    yTicks(ctx, r, 1.05, [-1, 0, 1]);
-    trace(ctx, r, sig.msg, count, off, 1.05, C.message, 2);
-    const i = sampleAt("msg", w);
-    if (i != null) {
-      crosshair(ctx, r, r.x + (i / (count - 1)) * r.w, [
-        `t = ${((i / FS) * 1000).toFixed(1)} ms`,
-        `m(t) = ${sig.msg[(off + i) % N].toFixed(3)}`,
-      ]);
-    }
-  }, [sig, count, off, hover]);
-
-  const recRef = usePlot((ctx, w, h) => {
-    const r = rect(w, h);
+  const drawRec = mkDraw((ctx, w, h) => {
+    const { sig, count, off, over } = view.current;
+    const r = rectOf(w, h);
     const range = over ? 1.7 : 1.05;
-    field(ctx, w, h, r);
-    midline(ctx, r);
-    yTicks(ctx, r, range, [-1, 0, 1]);
-    trace(ctx, r, sig.msg, count, off, range, C.message, 1.3, [4, 4]);
-    trace(ctx, r, sig.rec, count, off, range, C.recovered, 2);
-    const i = sampleAt("rec", w);
-    if (i != null) {
-      const a = sig.msg[(off + i) % N], b = sig.rec[(off + i) % N];
-      crosshair(ctx, r, r.x + (i / (count - 1)) * r.w, [
-        `sent = ${a.toFixed(3)}`,
-        `received = ${b.toFixed(3)}`,
-        `error = ${(b - a).toFixed(3)}`,
-      ]);
-    }
-  }, [sig, count, off, hover, over]);
+    field(ctx, w, h, r); midline(ctx, r); yTicks(ctx, r, range);
+    trace(ctx, r, sig.msg, count, off, range, C.message, 1.5, [5, 5]);
+    trace(ctx, r, sig.rec, count, off, range, C.recovered, 2.4);
+  });
 
-  const preset = useCallback((a, b, c, d) => {
-    setFc(a); setFm(b); setM(c); setSnr(d);
-  }, []);
+  const refMsg = useLoop(drawMsg);
+  const refCar = useLoop(drawCar);
+  const refMod = useLoop(drawMod);
+  const refSpec = useLoop(drawSpec);
+  const refRec = useLoop(drawRec);
+
+  const Plot = ({ id, title, legend, height, cref }) => (
+    <div className={show.includes(id) ? "wrap open" : "wrap"} aria-hidden={!show.includes(id)}>
+      <section className="panel">
+        <header className="p-head">
+          <h2>{title}</h2>
+          <ul className="legend">
+            {legend.map((l) => (
+              <li key={l.label}>
+                <span className="sw" style={l.dash
+                  ? { borderTop: `2px dashed ${l.color}` }
+                  : { background: l.color, height: 3 }} />
+                {l.label}
+              </li>
+            ))}
+          </ul>
+        </header>
+        <div className="plot" style={{ height }}><canvas ref={cref} /></div>
+      </section>
+    </div>
+  );
 
   return (
-    <div className="bench">
+    <div className="app">
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap');
-
-        .bench {
-          --sf: "SF Pro Display", -apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif;
-          --deep: #10272c;
-          --deep-2: #17343a;
-          --deep-3: #1e4048;
-          --line: #2c525b;
-          --fg: #e4eceb;
-          --fg-dim: #93aeb2;
-          --brass: #dda63f;
-          --rose: #d97a63;
-          background: var(--deep);
-          color: var(--fg);
-          font-family: var(--sf);
-          font-size: 14px; line-height: 1.55;
-          padding: 26px 24px 30px;
-          min-height: 100%;
-          box-sizing: border-box;
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        .app{
+          --sf:'SF Pro Display',-apple-system,BlinkMacSystemFont,'Inter',system-ui,sans-serif;
+          --deep:#10272c;--deep-2:#17343a;--deep-3:#1e4048;--line:#2c525b;
+          --fg:#e8efee;--fg-dim:#93aeb2;--brass:#dda63f;--rose:#d97a63;--go:#6fbfa0;
+          background:var(--deep);color:var(--fg);min-height:100%;font-family:var(--sf);
+          font-size:15px;line-height:1.55;padding:24px 22px 32px;box-sizing:border-box;
         }
-        .bench *, .bench *::before, .bench *::after { box-sizing: border-box; }
+        .app *,.app *::before,.app *::after{box-sizing:border-box;}
 
-        .mast { display: flex; justify-content: space-between; align-items: flex-end;
-                gap: 26px; flex-wrap: wrap; padding-bottom: 18px;
-                border-bottom: 1px solid var(--line); margin-bottom: 20px; }
-        .mast h1 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -.01em; }
-        .mast .course { margin: 2px 0 16px; font-size: 13px; color: var(--fg-dim); }
-        .eq { font-family: var(--sf);
-              font-size: clamp(20px, 3.6vw, 31px); font-weight: 400; }
-        .eq i { font-style: italic; }
-        .eq .v { color: var(--brass); font-style: normal; font-variant-numeric: tabular-nums; }
-        .eq .o { color: var(--fg-dim); }
-        .stat { text-align: right; }
-        .stat .n { font-family: var(--sf); font-size: 36px;
-                   line-height: 1; font-variant-numeric: tabular-nums; }
-        .stat .l { font-size: 12px; color: var(--fg-dim); margin-top: 5px;
-                   max-width: 200px; margin-left: auto; line-height: 1.4; }
+        .top{display:flex;justify-content:space-between;align-items:center;gap:20px;
+             flex-wrap:wrap;padding-bottom:16px;border-bottom:1px solid var(--line);margin-bottom:22px;}
+        .top h1{margin:0;font-size:17px;font-weight:600;letter-spacing:-.015em;}
+        .top .sub{margin:1px 0 0;font-size:13px;color:var(--fg-dim);}
+        .tools{display:flex;gap:7px;align-items:center;}
 
-        .flag { margin: 0 0 20px; padding: 11px 14px; border-radius: 2px;
-                background: rgba(217,122,99,.13); border-left: 3px solid var(--rose);
-                font-size: 13px; color: #f7e2da; max-width: 66ch; }
+        button{font-family:inherit;font-size:13px;cursor:pointer;color:var(--fg);
+          background:transparent;border:1px solid var(--line);border-radius:3px;padding:7px 13px;
+          transition:border-color .15s,color .15s,background .15s;}
+        button:hover:not(:disabled){border-color:var(--brass);color:var(--brass);}
+        button:focus-visible{outline:2px solid var(--brass);outline-offset:2px;}
+        button[aria-pressed=true]{background:var(--brass);border-color:var(--brass);color:#14262b;}
+        button:disabled{opacity:.35;cursor:not-allowed;}
 
-        .grid { display: grid; grid-template-columns: 264px minmax(0,1fr); gap: 20px; align-items: start; }
-        .stack { display: grid; gap: 16px; }
-        .pair { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 16px; }
-        @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } .pair { grid-template-columns: 1fr; } }
+        .stage{display:grid;grid-template-columns:340px minmax(0,1fr);gap:26px;align-items:start;}
+        @media(max-width:940px){.stage{grid-template-columns:1fr;}}
 
-        .rail { background: var(--deep-2); border: 1px solid var(--line);
-                border-radius: 3px; padding: 17px; position: sticky; top: 14px; }
-        @media (max-width: 900px) { .rail { position: static; } }
-        .rail h3 { margin: 0 0 12px; font-size: 12px; font-weight: 500; color: var(--fg-dim); }
-        .ctl { margin-bottom: 15px; }
-        .ctl:last-child { margin-bottom: 0; }
-        .ctl-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-        .ctl-top label { font-size: 13px; }
-        .ctl-top output { font-size: 13px; color: var(--brass); font-variant-numeric: tabular-nums; }
-        .ctl small { display: block; font-size: 11.5px; color: var(--fg-dim); margin-top: 4px; line-height: 1.4; }
+        .rail{position:sticky;top:16px;}
+        @media(max-width:940px){.rail{position:static;}}
+        .steps{list-style:none;margin:0 0 20px;padding:0;}
+        .steps li{display:flex;gap:11px;align-items:baseline;padding:5px 0;cursor:pointer;
+                  color:var(--fg-dim);font-size:13.5px;border:0;background:none;width:100%;
+                  text-align:left;font-family:inherit;}
+        .steps li .num{font-variant-numeric:tabular-nums;font-size:11.5px;width:16px;flex:none;
+                       color:var(--line);}
+        .steps li:hover{color:var(--fg);}
+        .steps li[data-on=true]{color:var(--brass);}
+        .steps li[data-on=true] .num{color:var(--brass);}
+        .steps li[data-done=true]{color:var(--fg);}
 
-        input[type=range] { -webkit-appearance: none; appearance: none;
-          width: 100%; background: transparent; margin: 8px 0 0; cursor: grab; }
-        input[type=range]:active { cursor: grabbing; }
-        input[type=range]::-webkit-slider-runnable-track { height: 2px; background: var(--line); border-radius: 2px; }
-        input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
-          width: 15px; height: 15px; margin-top: -6.5px; border-radius: 50%;
-          background: var(--brass); border: 2px solid var(--deep-2); }
-        input[type=range]::-moz-range-track { height: 2px; background: var(--line); border-radius: 2px; }
-        input[type=range]::-moz-range-thumb { width: 13px; height: 13px; border-radius: 50%;
-          background: var(--brass); border: 2px solid var(--deep-2); }
-        input[type=range]:focus-visible { outline: 2px solid var(--brass); outline-offset: 4px; border-radius: 2px; }
+        .card{background:var(--deep-3);border:1px solid var(--line);border-radius:4px;padding:20px;}
+        .card h2{margin:0 0 9px;font-size:22px;font-weight:600;letter-spacing:-.02em;line-height:1.2;}
+        .card p{margin:0;font-size:14.5px;color:#cfdedd;max-width:44ch;}
+        .nav{display:flex;gap:8px;margin-top:18px;}
+        .nav button{flex:1;}
 
-        .sep { height: 1px; background: var(--line); margin: 17px -17px; }
-        .btns { display: flex; flex-wrap: wrap; gap: 6px; }
-        button { font-family: inherit; font-size: 12px; cursor: pointer; color: var(--fg);
-                 background: transparent; border: 1px solid var(--line);
-                 border-radius: 2px; padding: 6px 10px;
-                 transition: border-color .12s ease, color .12s ease; }
-        button:hover { border-color: var(--brass); color: var(--brass); }
-        button:focus-visible { outline: 2px solid var(--brass); outline-offset: 2px; }
-        button[aria-pressed=true] { background: var(--brass); border-color: var(--brass); color: #14262b; }
-        .play { width: 100%; margin-top: 8px; }
+        .quiz{margin-top:16px;padding-top:16px;border-top:1px solid var(--line);}
+        .quiz p{font-size:14px;color:var(--brass);margin:0 0 11px;}
+        .quiz button{display:block;width:100%;text-align:left;margin-bottom:7px;font-size:13.5px;}
+        .quiz button[data-r=hit]{background:rgba(111,191,160,.16);border-color:var(--go);color:#cdefe1;}
+        .quiz button[data-r=miss]{background:rgba(217,122,99,.14);border-color:var(--rose);color:#f6ded6;}
+        .quiz .note{margin:10px 0 0;font-size:13px;color:var(--fg-dim);}
 
-        .rd { list-style: none; margin: 0; padding: 0; }
-        .rd li { display: flex; justify-content: space-between; gap: 12px; font-size: 12.5px;
-                 padding: 6px 0; border-bottom: 1px solid rgba(44,82,91,.55); }
-        .rd li:last-child { border-bottom: 0; padding-bottom: 0; }
-        .rd span { color: var(--fg-dim); }
-        .rd b { font-weight: 500; font-variant-numeric: tabular-nums; }
+        .eq{font-size:19px;margin-top:20px;color:var(--fg-dim);font-variant-numeric:tabular-nums;}
+        .eq .v{color:var(--brass);}
 
-        .panel { background: var(--deep-2); border: 1px solid var(--line);
-                 border-radius: 3px; padding: 14px; }
-        .panel-feature { background: var(--deep-3); }
-        .p-head { display: flex; justify-content: space-between; align-items: flex-start;
-                  gap: 14px; flex-wrap: wrap; margin-bottom: 11px; }
-        .p-head h2 { margin: 0; font-size: 14px; font-weight: 600; }
-        .p-sub { margin: 3px 0 0; font-size: 12px; color: var(--fg-dim); max-width: 54ch; }
-        .p-meta { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
-        .hint { font-size: 11.5px; color: var(--brass); padding: 2px 8px;
-                border: 1px dashed rgba(221,166,63,.45); border-radius: 2px; }
-        .legend { display: flex; gap: 13px; list-style: none; margin: 0; padding: 0; }
-        .legend li { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--fg-dim); }
-        .sw { width: 14px; display: inline-block; border-radius: 2px; }
-        .plot { border-radius: 2px; overflow: hidden; touch-action: none; }
-        .plot canvas { display: block; }
+        .wrap{max-height:0;opacity:0;overflow:hidden;transform:translateY(-6px);
+              transition:max-height .45s ease,opacity .35s ease,transform .35s ease,margin .45s ease;
+              margin-bottom:0;}
+        .wrap.open{max-height:420px;opacity:1;transform:none;margin-bottom:14px;}
 
-        .foot { margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--line);
-                font-size: 12px; color: var(--fg-dim); max-width: 78ch; }
+        .panel{background:var(--deep-2);border:1px solid var(--line);border-radius:4px;padding:14px;}
+        .p-head{display:flex;justify-content:space-between;align-items:baseline;gap:14px;
+                flex-wrap:wrap;margin-bottom:10px;}
+        .p-head h2{margin:0;font-size:14px;font-weight:600;}
+        .legend{display:flex;gap:14px;list-style:none;margin:0;padding:0;}
+        .legend li{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--fg-dim);}
+        .sw{width:15px;display:inline-block;border-radius:2px;}
+        .plot{border-radius:3px;overflow:hidden;}
+        .plot canvas{display:block;}
 
-        @media (prefers-reduced-motion: reduce) { button { transition: none; } }
+        .dials{background:var(--deep-2);border:1px solid var(--line);border-radius:4px;
+               padding:17px;margin-bottom:20px;}
+        .ctl{margin-bottom:15px;}.ctl:last-child{margin-bottom:0;}
+        .ctl-top{display:flex;justify-content:space-between;align-items:baseline;}
+        .ctl-top label{font-size:13.5px;}
+        .ctl-top output{font-size:13.5px;color:var(--brass);font-variant-numeric:tabular-nums;}
+        input[type=range]{-webkit-appearance:none;appearance:none;width:100%;background:transparent;
+          margin:9px 0 0;cursor:grab;}
+        input[type=range]:active{cursor:grabbing;}
+        input[type=range]::-webkit-slider-runnable-track{height:2px;background:var(--line);border-radius:2px;}
+        input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:16px;height:16px;
+          margin-top:-7px;border-radius:50%;background:var(--brass);border:2px solid var(--deep-2);}
+        input[type=range]::-moz-range-track{height:2px;background:var(--line);border-radius:2px;}
+        input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;
+          background:var(--brass);border:2px solid var(--deep-2);}
+        input[type=range]:focus-visible{outline:2px solid var(--brass);outline-offset:4px;}
+
+        .facts{display:flex;gap:28px;flex-wrap:wrap;margin-top:6px;}
+        .facts div{font-size:12.5px;color:var(--fg-dim);}
+        .facts b{display:block;font-size:23px;color:var(--fg);font-weight:500;
+                 font-variant-numeric:tabular-nums;line-height:1.25;}
+
+        .flag{margin:0 0 14px;padding:11px 14px;border-radius:3px;font-size:13.5px;
+              background:rgba(217,122,99,.14);border-left:3px solid var(--rose);color:#f7e2da;}
+
+        @media(prefers-reduced-motion:reduce){.wrap{transition:none;}button{transition:none;}}
       `}</style>
 
-      <div className="mast">
+      <div className="top">
         <div>
-          <h1>AM modulation playground</h1>
-          <p className="course">TC-307 Communication Systems</p>
-          <div className="eq">
-            <i>s</i>(<i>t</i>) <span className="o">=</span> [1 <span className="o">+</span>{" "}
-            <span className="v">{m.toFixed(2)}</span> cos(2π<span className="v">{fm}</span>
-            <i>t</i>)] <span className="o">·</span> cos(2π<span className="v">{fc}</span><i>t</i>)
-          </div>
+          <h1>How AM radio works</h1>
+          <p className="sub">TC-307 Communication Systems</p>
         </div>
-        <div className="stat">
-          <div className="n" style={{ color: over ? "#d97a63" : "#dda63f" }}>{eff.toFixed(1)}%</div>
-          <div className="l">of transmitted power actually carries the message</div>
+        <div className="tools">
+          <button aria-pressed={inLesson} onClick={() => { setMode("lesson"); goStep(step); }}>Lesson</button>
+          <button aria-pressed={!inLesson} onClick={() => { tween.current = null; setMode("explore"); }}>Explore</button>
+          <button aria-pressed={running} onClick={() => setRunning((r) => !r)}>{running ? "Freeze" : "Run"}</button>
+          <button onClick={share}>{copied ? "Link copied" : "Copy link"}</button>
         </div>
       </div>
 
-      {over && (
-        <p className="flag">
-          Overmodulated at m = {m.toFixed(2)}. The envelope crosses zero, the carrier flips phase,
-          and the detector folds those troughs back up as extra humps. That information is gone —
-          no receiver can recover it.
-        </p>
-      )}
-
-      <div className="grid">
+      <div className="stage">
         <div className="rail">
-          <h3>Transmitter</h3>
+          {inLesson ? (
+            <>
+              <ul className="steps">
+                {LESSON.map((s, i) => (
+                  <li key={s.id} role="button" tabIndex={0}
+                      data-on={i === step} data-done={i < step}
+                      onClick={() => goStep(i)}
+                      onKeyDown={(e) => e.key === "Enter" && goStep(i)}>
+                    <span className="num">{i + 1}</span>{s.title}
+                  </li>
+                ))}
+              </ul>
 
-          <div className="ctl">
-            <div className="ctl-top"><label htmlFor="fc">Carrier frequency</label><output>{fc} Hz</output></div>
-            <input id="fc" type="range" min="8" max="80" step="1" value={fc} onChange={(e) => setFc(+e.target.value)} />
-          </div>
-          <div className="ctl">
-            <div className="ctl-top"><label htmlFor="fm">Message frequency</label><output>{fm} Hz</output></div>
-            <input id="fm" type="range" min="1" max="12" step="1" value={fm} onChange={(e) => setFm(+e.target.value)} />
-            <small>Sidebands slide apart as this rises.</small>
-          </div>
-          <div className="ctl">
-            <div className="ctl-top"><label htmlFor="mi">Modulation index</label><output>{m.toFixed(2)}</output></div>
-            <input id="mi" type="range" min="0" max="1.6" step="0.01" value={m} onChange={(e) => setM(+e.target.value)} />
-            <small>Past 1.00 the wave breaks.</small>
-          </div>
+              <div className="card">
+                <h2>{lessonStep.title}</h2>
+                <p>{lessonStep.body}</p>
 
-          <div className="sep" />
-          <h3>Channel</h3>
-          <div className="ctl">
-            <div className="ctl-top"><label htmlFor="snr">Signal-to-noise</label><output>{snr} dB</output></div>
-            <input id="snr" type="range" min="0" max="50" step="1" value={snr} onChange={(e) => setSnr(+e.target.value)} />
-            <small>Noise lifts the spectrum floor before it ruins the wave.</small>
-          </div>
-          <div className="btns">
-            <button onClick={() => setSeed(Math.floor(Math.random() * 1e6))}>Reroll noise</button>
-          </div>
+                {lessonStep.predict && (
+                  <div className="quiz">
+                    <p>{lessonStep.predict.q}</p>
+                    {lessonStep.predict.options.map((o, i) => (
+                      <button key={i} onClick={() => picked == null && answer(i)}
+                        data-r={picked == null ? undefined
+                          : i === lessonStep.predict.answer ? "hit"
+                          : i === picked ? "miss" : undefined}>
+                        {o}
+                      </button>
+                    ))}
+                    {picked != null && <p className="note">{lessonStep.predict.note}</p>}
+                  </div>
+                )}
 
-          <div className="sep" />
-          <h3>View</h3>
-          <div className="ctl">
-            <div className="ctl-top"><label htmlFor="pz">Message periods</label><output>{periods}</output></div>
-            <input id="pz" type="range" min="1" max="6" step="1" value={periods} onChange={(e) => setPeriods(+e.target.value)} />
-            <small>{cycles} carrier cycles on screen.</small>
-          </div>
-          <div className="btns">
-            <button aria-pressed={!logScale} onClick={() => setLogScale(false)}>Linear</button>
-            <button aria-pressed={logScale} onClick={() => setLogScale(true)}>Decibels</button>
-          </div>
-          <button className="play" aria-pressed={playing} onClick={() => setPlaying((p) => !p)}>
-            {playing ? "Freeze the trace" : "Run the signal"}
-          </button>
+                <div className="nav">
+                  <button onClick={() => goStep(step - 1)} disabled={step === 0}>Back</button>
+                  <button onClick={() => goStep(step + 1)} disabled={step === LESSON.length - 1 || gated}>
+                    {gated ? "Pick one first" : "Next"}
+                  </button>
+                </div>
+              </div>
 
-          <div className="sep" />
-          <h3>Starting points</h3>
-          <div className="btns">
-            <button onClick={() => preset(40, 4, 0.6, 45)}>Textbook</button>
-            <button onClick={() => preset(40, 4, 1.3, 45)}>Overmodulate</button>
-            <button onClick={() => preset(40, 12, 0.6, 45)}>Widen band</button>
-            <button onClick={() => preset(40, 4, 0.6, 6)}>Heavy noise</button>
-          </div>
+              <div className="eq">
+                s(t) = [1 + <span className="v">{params.m.toFixed(2)}</span>·cos(2π·
+                <span className="v">{params.fm.toFixed(1)}</span>·t)] · cos(2π·
+                <span className="v">{params.fc.toFixed(0)}</span>·t)
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="dials">
+                {[
+                  ["Carrier frequency", "fc", 8, 80, 1, `${params.fc.toFixed(0)} Hz`],
+                  ["Message frequency", "fm", 1, 12, 1, `${params.fm.toFixed(0)} Hz`],
+                  ["Modulation index", "m", 0, 1.6, 0.01, params.m.toFixed(2)],
+                  ["Signal-to-noise", "snr", 0, 50, 1, `${params.snr.toFixed(0)} dB`],
+                ].map(([label, key, lo, hi, st, out]) => (
+                  <div className="ctl" key={key}>
+                    <div className="ctl-top">
+                      <label htmlFor={key}>{label}</label><output>{out}</output>
+                    </div>
+                    <input id={key} type="range" min={lo} max={hi} step={st}
+                      value={params[key]} onChange={(e) => set(key)(+e.target.value)} />
+                  </div>
+                ))}
+                <div className="ctl">
+                  <div className="ctl-top">
+                    <label htmlFor="pz">Message periods shown</label><output>{periods}</output>
+                  </div>
+                  <input id="pz" type="range" min="1" max="6" step="1" value={periods}
+                    onChange={(e) => setPeriods(+e.target.value)} />
+                </div>
+              </div>
 
-          <div className="sep" />
-          <ul className="rd">
-            <li><span>Lower sideband</span><b>{fc - fm} Hz</b></li>
-            <li><span>Carrier</span><b>{fc} Hz</b></li>
-            <li><span>Upper sideband</span><b>{fc + fm} Hz</b></li>
-            <li><span>Bandwidth, 2·fm</span><b>{2 * fm} Hz</b></li>
-            <li><span>Sideband height, m/2</span><b>{(m / 2).toFixed(3)}</b></li>
-            <li><span>Detector cutoff</span><b>{Math.sqrt(fm * fc).toFixed(1)} Hz</b></li>
-          </ul>
+              <div className="facts">
+                <div><b>{eff.toFixed(1)}%</b>power carrying the message</div>
+                <div><b>{(2 * params.fm).toFixed(0)} Hz</b>bandwidth</div>
+                <div><b>{(params.m / 2).toFixed(2)}</b>sideband height</div>
+              </div>
+            </>
+          )}
         </div>
 
-        <div className="stack">
-          <Panel
-            feature
-            title="Modulated signal"
-            sub="The carrier squeezed inside the dashed envelope. The envelope is the message."
-            hint="drag up or down"
-            grab="ns-resize"
-            height={272}
-            legend={[{ label: "s(t)", color: C.carrier }, { label: "envelope", color: C.envelope, dash: true }]}
-            canvasRef={modRef}
-            onPointerDown={dragIndex}
-            onPointerMove={hoverAt("mod")}
-            onPointerLeave={clearHover}
-          />
-
-          <Panel
-            title="Spectrum"
-            sub="Three cosines and nothing else — the carrier, plus one sideband either side at fc ± fm."
-            hint="drag a gold spike"
-            grab="ew-resize"
-            height={212}
-            legend={[{ label: "carrier and sidebands", color: C.spike }, { label: "noise floor", color: C.bars }]}
-            canvasRef={specRef}
-            onPointerDown={dragSpike}
-            onPointerMove={hoverAt("spec")}
-            onPointerLeave={clearHover}
-          />
-
-          <div className="pair">
-            <Panel
-              title="Message sent"
-              sub="What you are trying to transmit."
-              height={158}
-              legend={[{ label: "m(t)", color: C.message }]}
-              canvasRef={msgRef}
-              onPointerMove={hoverAt("msg")}
-              onPointerLeave={clearHover}
-            />
-            <Panel
-              title="Message recovered"
-              sub="Rectify, low-pass, drop the DC."
-              height={158}
-              legend={[{ label: "sent", color: C.message, dash: true }, { label: "detected", color: C.recovered }]}
-              canvasRef={recRef}
-              onPointerMove={hoverAt("rec")}
-              onPointerLeave={clearHover}
-            />
-          </div>
+        <div>
+          {over && (
+            <p className="flag">
+              Overmodulated at m = {params.m.toFixed(2)}. The envelope crosses zero and the
+              detector folds those troughs back up. That information cannot be recovered.
+            </p>
+          )}
+          <Plot id="msg" title="Message" height={150} cref={refMsg}
+            legend={[{ label: "m(t)", color: C.message }]} />
+          <Plot id="car" title="Carrier" height={150} cref={refCar}
+            legend={[{ label: "cos(2π·fc·t)", color: C.carrier }]} />
+          <Plot id="mod" title="Modulated signal" height={252} cref={refMod}
+            legend={[{ label: "s(t)", color: C.carrier }, { label: "envelope", color: C.envelope, dash: true }]} />
+          <Plot id="spec" title="Spectrum" height={210} cref={refSpec}
+            legend={[{ label: "carrier and sidebands", color: C.spike }, { label: "noise floor", color: C.bars }]} />
+          <Plot id="rec" title="Recovered message" height={172} cref={refRec}
+            legend={[{ label: "sent", color: C.message, dash: true }, { label: "detected", color: C.recovered }]} />
         </div>
       </div>
-
-      <p className="foot">
-        Sampled at {FS} Hz over {(N / FS).toFixed(0)} s, so the FFT resolves {BIN} Hz per bin and every
-        spike lands dead centre in a bin — no leakage, no window function needed. The detector cutoff
-        sits at √(fm·fc), which keeps it between the two frequencies the way the RC rule asks.
-      </p>
     </div>
   );
 }
