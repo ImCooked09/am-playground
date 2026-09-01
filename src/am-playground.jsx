@@ -186,7 +186,7 @@ function field(ctx, w, h, r) {
 
 function yTicks(ctx, r, range, labels) {
   ctx.fillStyle = C.tick;
-  ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
+  ctx.font = "11px 'SF Pro Display', -apple-system, Inter, system-ui, sans-serif";
   ctx.textAlign = "right";
   ctx.textBaseline = "middle";
   ctx.strokeStyle = C.rule;
@@ -245,7 +245,7 @@ function crosshair(ctx, r, hx, lines) {
   ctx.stroke();
   ctx.restore();
 
-  ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
+  ctx.font = "11px 'SF Pro Display', -apple-system, Inter, system-ui, sans-serif";
   ctx.textBaseline = "top";
   const wBox = Math.max(...lines.map((t) => ctx.measureText(t).width)) + 14;
   const hBox = lines.length * 14 + 9;
@@ -413,7 +413,7 @@ export default function AmPlayground() {
     trace(ctx, r, sig.envNeg, count, off, range, C.envelope, 1.7, [5, 4]);
 
     ctx.fillStyle = C.tick;
-    ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
+    ctx.font = "11px 'SF Pro Display', -apple-system, Inter, system-ui, sans-serif";
     ctx.fillText(`${(span * 1000).toFixed(0)} ms shown`, r.x + 3, r.y + r.h + 15);
 
     const i = sampleAt("mod", w);
@@ -461,7 +461,7 @@ export default function AmPlayground() {
     ctx.lineTo(xb, yb); ctx.lineTo(xb, yb + 5);
     ctx.stroke();
     ctx.fillStyle = C.spike;
-    ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
+    ctx.font = "11px 'SF Pro Display', -apple-system, Inter, system-ui, sans-serif";
     ctx.textAlign = "center";
     ctx.fillText(`bandwidth ${2 * fm} Hz`, (xa + xb) / 2, yb - 4);
     ctx.textAlign = "left";
@@ -532,9 +532,10 @@ export default function AmPlayground() {
   return (
     <div className="bench">
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=Source+Serif+4:ital,wght@0,400;0,600;1,400&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap');
 
         .bench {
+          --sf: "SF Pro Display", -apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif;
           --deep: #10272c;
           --deep-2: #17343a;
           --deep-3: #1e4048;
@@ -545,7 +546,7 @@ export default function AmPlayground() {
           --rose: #d97a63;
           background: var(--deep);
           color: var(--fg);
-          font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+          font-family: var(--sf);
           font-size: 14px; line-height: 1.55;
           padding: 26px 24px 30px;
           min-height: 100%;
@@ -558,13 +559,13 @@ export default function AmPlayground() {
                 border-bottom: 1px solid var(--line); margin-bottom: 20px; }
         .mast h1 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -.01em; }
         .mast .course { margin: 2px 0 16px; font-size: 13px; color: var(--fg-dim); }
-        .eq { font-family: "Source Serif 4", Georgia, serif;
+        .eq { font-family: var(--sf);
               font-size: clamp(20px, 3.6vw, 31px); font-weight: 400; }
         .eq i { font-style: italic; }
         .eq .v { color: var(--brass); font-style: normal; font-variant-numeric: tabular-nums; }
         .eq .o { color: var(--fg-dim); }
         .stat { text-align: right; }
-        .stat .n { font-family: "Source Serif 4", Georgia, serif; font-size: 36px;
+        .stat .n { font-family: var(--sf); font-size: 36px;
                    line-height: 1; font-variant-numeric: tabular-nums; }
         .stat .l { font-size: 12px; color: var(--fg-dim); margin-top: 5px;
                    max-width: 200px; margin-left: auto; line-height: 1.4; }
