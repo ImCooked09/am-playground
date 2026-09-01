@@ -252,11 +252,12 @@ function Figure({ open, caption, height, cref }) {
   );
 }
 
-const rectOf = (w, h) => ({
-  x: PAD.l, y: PAD.t,
-  w: Math.max(10, w - PAD.l - PAD.r),
-  h: Math.max(10, h - PAD.t - PAD.b),
-});
+const rectOf = (w, h) => {
+  const tight = w < 470;                       // phone-width plate
+  const l = tight ? 28 : PAD.l, r = tight ? 10 : PAD.r;
+  const t = tight ? 24 : PAD.t, b = tight ? 21 : PAD.b;
+  return { x: l, y: t, w: Math.max(10, w - l - r), h: Math.max(10, h - t - b), tight };
+};
 
 /* Two-level graticule, the way plotting paper actually rules up. */
 function plate(ctx, w, h, r) {
@@ -332,7 +333,13 @@ function curve(ctx, r, data, count, off, range, color, lw, dash) {
 }
 
 /* Leader line from a point on a curve out to a label. */
-function callout(ctx, tx, ty, lx, ly, text, color, align) {
+function callout(ctx, r, tx, ty, lx, ly, text, color, align) {
+  /* keep the label on the paper however narrow the plate gets */
+  ctx.font = `${r.tight ? 11.5 : 12.5}px ${FONT}`;
+  const tw = ctx.measureText(text).width + 10;
+  lx = Math.min(Math.max(lx, r.x + (align === "right" ? tw : 4)),
+                r.x + r.w - (align === "right" ? 4 : tw));
+  ly = Math.min(Math.max(ly, r.y + 10), r.y + r.h - 10);
   ctx.strokeStyle = color;
   ctx.fillStyle = color;
   ctx.lineWidth = 1;
@@ -343,7 +350,6 @@ function callout(ctx, tx, ty, lx, ly, text, color, align) {
   ctx.moveTo(tx, ty);
   ctx.lineTo(lx, ly);
   ctx.stroke();
-  ctx.font = `12.5px ${FONT}`;
   ctx.textAlign = align || "left";
   ctx.textBaseline = "middle";
   ctx.fillText(text, lx + (align === "right" ? -6 : 6), ly);
@@ -353,10 +359,11 @@ function callout(ctx, tx, ty, lx, ly, text, color, align) {
 
 /* Trace names sit inside the plate, so no legend block is needed. */
 function keys(ctx, r, items) {
-  ctx.font = `12.5px ${FONT}`;
+  ctx.font = `${r.tight ? 11.5 : 12.5}px ${FONT}`;
   ctx.textBaseline = "alphabetic";
   let x = r.x + 2;
-  items.forEach(({ label, color }) => {
+  items.forEach(({ label: full, short, color }) => {
+    const label = r.tight && short ? short : full;
     ctx.fillStyle = color;
     ctx.fillRect(x, r.y - 13, 13, 2.5);
     ctx.fillText(label, x + 18, r.y - 9);
@@ -403,6 +410,18 @@ export default function AmLesson() {
   const [periods, setPeriods] = useState(2);
   const [seed] = useState(1234);
   const [copied, setCopied] = useState(false);
+  const [narrow, setNarrow] = useState(
+    () => typeof window !== "undefined" && window.innerWidth < 620);
+
+  useEffect(() => {
+    const onSize = () => setNarrow(window.innerWidth < 620);
+    window.addEventListener("resize", onSize);
+    return () => window.removeEventListener("resize", onSize);
+  }, []);
+
+  const H = narrow
+    ? { msg: 122, car: 122, mod: 194, spec: 184, rec: 144 }
+    : { msg: 148, car: 148, mod: 248, spec: 216, rec: 172 };
 
   const paramsRef = useRef(params);
   paramsRef.current = params;
@@ -509,7 +528,7 @@ export default function AmLesson() {
     const { sig, count, off } = view.current;
     const r = rectOf(w, h);
     plate(ctx, w, h, r); zeroRule(ctx, r); yScale(ctx, r, 1.05);
-    keys(ctx, r, [{ label: "message", color: C.message }]);
+    keys(ctx, r, [{ label: "message", short: "m(t)", color: C.message }]);
     curve(ctx, r, sig.msg, count, off, 1.05, C.message, 2.4);
   };
 
@@ -529,7 +548,7 @@ export default function AmLesson() {
     const range = 1 + Math.max(params.m, 0.2) + 0.25;
     plate(ctx, w, h, r); zeroRule(ctx, r); yScale(ctx, r, range);
     keys(ctx, r, [
-      { label: "modulated signal", color: C.carrier },
+      { label: "modulated signal", short: "s(t)", color: C.carrier },
       { label: "envelope", color: C.envelope },
     ]);
     curve(ctx, r, sig.sig, count, off, range, C.carrier, 1.2);
@@ -548,7 +567,7 @@ export default function AmLesson() {
       }
       const tx = xAt(bi), ty = yAt(bv);
       const right = tx > r.x + r.w * 0.6;
-      callout(ctx, tx, ty, right ? tx - 60 : tx + 60, Math.max(r.y + 16, ty - 26),
+      callout(ctx, r, tx, ty, right ? tx - 60 : tx + 60, Math.max(r.y + 16, ty - 26),
         "the envelope", C.envelope, right ? "right" : "left");
     }
 
@@ -561,7 +580,7 @@ export default function AmLesson() {
       if (bi >= 0 && bv < 0) {
         const tx = xAt(bi), ty = yAt(bv);
         const right = tx > r.x + r.w * 0.55;
-        callout(ctx, tx, ty, right ? tx - 52 : tx + 52, Math.min(r.y + r.h - 16, ty + 24),
+        callout(ctx, r, tx, ty, right ? tx - 52 : tx + 52, Math.min(r.y + r.h - 16, ty + 24),
           "envelope below zero", C.envelope, right ? "right" : "left");
       }
     }
@@ -604,23 +623,24 @@ export default function AmLesson() {
     ctx.textAlign = "left";
 
     if (mark.includes("spikes")) {
-      callout(ctx, xc, toY(1), xc + 46, r.y + r.h * 0.34, "carrier", C.spike);
-      callout(ctx, xa, toY(params.m / 2), xa - 40, r.y + r.h * 0.58, "sideband", C.spike, "right");
-      callout(ctx, xb, toY(params.m / 2), xb + 34, r.y + r.h * 0.58, "sideband", C.spike);
+      callout(ctx, r, xc, toY(1), xc + 46, r.y + r.h * 0.34, "carrier", C.spike);
+      callout(ctx, r, xa, toY(params.m / 2), xa - 40, r.y + r.h * 0.58, "sideband", C.spike, "right");
+      callout(ctx, r, xb, toY(params.m / 2), xb + 34, r.y + r.h * 0.58, "sideband", C.spike);
     }
     if (mark.includes("waste")) {
-      callout(ctx, xc, toY(0.85), xc + 46, r.y + r.h * 0.3, "carries nothing", C.spike);
+      callout(ctx, r, xc, toY(0.85), xc + 46, r.y + r.h * 0.3, "carries nothing", C.spike);
     }
     if (mark.includes("floor")) {
       const k = Math.round(18 / BIN);
-      callout(ctx, fx(18), toY(sig.spec[k] || 0), fx(18) + 40, r.y + r.h * 0.55,
+      callout(ctx, r, fx(18), toY(sig.spec[k] || 0), fx(18) + 40, r.y + r.h * 0.55,
         "noise floor", C.label);
     }
 
     ctx.fillStyle = C.tick;
     ctx.font = `12px ${FONT}`;
-    for (let f = 0; f <= F_VIEW; f += 20) ctx.fillText(String(f), fx(f) - 7, r.y + r.h + 18);
-    ctx.fillText("Hz", r.x + r.w - 20, r.y + r.h + 18);
+    const stepHz = r.tight ? 40 : 20;
+    for (let f = 0; f <= F_VIEW; f += stepHz) ctx.fillText(String(f), fx(f) - 7, r.y + r.h + 16);
+    ctx.fillText("Hz", r.x + r.w - 20, r.y + r.h + 16);
   };
 
   const drawRec = useRef(null);
@@ -645,7 +665,7 @@ export default function AmLesson() {
       }
       const tx = r.x + (bi / (count - 1)) * r.w, ty = mid - bv * k;
       const right = tx > r.x + r.w * 0.55;
-      callout(ctx, tx, ty, right ? tx - 56 : tx + 56, Math.max(r.y + 18, ty - 26),
+      callout(ctx, r, tx, ty, right ? tx - 56 : tx + 56, Math.max(r.y + 18, ty - 26),
         "not in the original", C.recovered, right ? "right" : "left");
     }
   };
@@ -685,8 +705,8 @@ export default function AmLesson() {
         button:disabled{opacity:.32;cursor:not-allowed;}
 
         /* the ruler doubles as progress and as a jump control */
-        .ruler{display:flex;gap:0;margin:22px 0 26px;border-top:1px solid var(--hair);
-               padding-top:9px;}
+        .ruler{display:flex;gap:0;margin:13px 0 0;border-top:1px solid var(--hair);
+               padding-top:8px;padding-bottom:12px;}
         .ruler button{flex:1;border:0;border-radius:0;padding:0;height:22px;background:none;
                       position:relative;}
         .ruler button::after{content:"";position:absolute;left:0;top:0;width:100%;height:2px;
@@ -699,7 +719,7 @@ export default function AmLesson() {
                gap:46px;align-items:start;}
         @media(max-width:960px){.stage{grid-template-columns:1fr;gap:26px;}}
 
-        .col{position:sticky;top:20px;}
+        .col{position:sticky;top:124px;}
         @media(max-width:960px){.col{position:static;}}
         .count{font-size:13px;color:var(--mute);font-variant-numeric:tabular-nums;
                letter-spacing:.04em;}
@@ -718,12 +738,19 @@ export default function AmLesson() {
 
         .nav{display:flex;gap:8px;margin-top:24px;}
 
-        .eq{margin-top:26px;font-size:15px;color:var(--mute);font-variant-numeric:tabular-nums;}
+        .band{position:sticky;top:0;z-index:20;background:var(--bg);
+              padding:14px 0 0;margin-top:16px;}
+        .band::before{content:"";position:absolute;left:-28px;right:-28px;top:0;bottom:0;
+                      background:var(--bg);z-index:-1;}
+        .eq{margin:0;font-size:clamp(16px,3.9vw,28px);font-weight:300;letter-spacing:-.015em;
+            line-height:1.35;color:var(--ink);font-variant-numeric:tabular-nums;
+            display:flex;flex-wrap:wrap;gap:0 .34em;align-items:baseline;}
         .eq b{color:var(--accent);font-weight:500;}
+        .eq .mul{color:var(--mute);}
 
         .fig{margin:0 0 4px;max-height:0;opacity:0;overflow:hidden;
              transition:max-height .45s ease,opacity .3s ease,margin .45s ease;}
-        .fig.open{max-height:400px;opacity:1;margin-bottom:26px;}
+        .fig.open{max-height:460px;opacity:1;margin-bottom:26px;}
         .plate{overflow:hidden;}
         .plate canvas{display:block;}
         figcaption{margin-top:7px;font-size:13px;color:var(--mute);}
@@ -754,6 +781,32 @@ export default function AmLesson() {
         .warn{margin:0 0 20px;padding-left:13px;border-left:2px solid var(--plum);
               font-size:14.5px;color:#7A2350;max-width:60ch;}
 
+        @media(max-width:960px){
+          .page{padding:16px 16px 92px;-webkit-text-size-adjust:100%;}
+          .band::before{left:-16px;right:-16px;}
+          .band{padding-top:12px;margin-top:12px;
+                box-shadow:0 8px 12px -10px rgba(27,42,51,.25);}
+          .bar h1{font-size:17px;}
+          .tools{flex-wrap:wrap;}
+          .tools button{padding:9px 13px;}
+          /* the ruler is the only way to jump steps on a phone, so give it a thumb-sized target */
+          .ruler button{height:32px;}
+          .ruler button::after{top:6px;}
+          .col h2{font-size:26px;max-width:none;}
+          .col .body{font-size:16px;max-width:none;}
+          .fig.open{margin-bottom:20px;}
+          /* paging pinned to the bottom, so Next is always in reach of a thumb */
+          .nav{position:fixed;left:0;right:0;bottom:0;z-index:40;margin:0;
+               background:var(--bg);border-top:1px solid var(--hair);
+               padding:10px 16px calc(10px + env(safe-area-inset-bottom));}
+          .nav button{flex:1;padding:13px 12px;font-size:15px;}
+          .quiz button{padding:12px 14px;font-size:15px;}
+          .facts{gap:22px;}
+        }
+        @media(max-width:380px){
+          .eq{font-size:15px;}
+          .col h2{font-size:23px;}
+        }
         @media(prefers-reduced-motion:reduce){.fig{transition:none;}button{transition:none;}}
       `}</style>
 
@@ -770,16 +823,23 @@ export default function AmLesson() {
         </div>
       </div>
 
-      {inLesson && (
-        <div className="ruler">
-          {LESSON.map((s, i) => (
-            <button key={s.id} title={`${i + 1}. ${s.title}`}
-              data-on={i === step} data-done={i < step}
-              aria-label={`Step ${i + 1}: ${s.title}`}
-              onClick={() => goStep(i)} />
-          ))}
-        </div>
-      )}
+      <div className="band">
+        <p className="eq">
+          <span>s(t) = [1 + <b>{params.m.toFixed(2)}</b>·cos(2π·<b>{params.fm.toFixed(1)}</b>·t)]</span>
+          <span className="mul">·</span>
+          <span>cos(2π·<b>{params.fc.toFixed(0)}</b>·t)</span>
+        </p>
+        {inLesson && (
+          <div className="ruler">
+            {LESSON.map((s, i) => (
+              <button key={s.id} title={`${i + 1}. ${s.title}`}
+                data-on={i === step} data-done={i < step}
+                aria-label={`Step ${i + 1}: ${s.title}`}
+                onClick={() => goStep(i)} />
+            ))}
+          </div>
+        )}
+      </div>
 
       <div className="stage">
         <div className="col">
@@ -812,10 +872,6 @@ export default function AmLesson() {
                 </button>
               </div>
 
-              <p className="eq">
-                s(t) = [1 + <b>{params.m.toFixed(2)}</b>·cos(2π·<b>{params.fm.toFixed(1)}</b>·t)]
-                {" "}· cos(2π·<b>{params.fc.toFixed(0)}</b>·t)
-              </p>
             </>
           ) : (
             <>
@@ -860,15 +916,15 @@ export default function AmLesson() {
               detector folds those troughs back up. That information cannot be recovered.
             </p>
           )}
-          <Figure open={show.includes("msg")} height={148} cref={refMsg}
+          <Figure open={show.includes("msg")} height={H.msg} cref={refMsg}
             caption="The signal you want to send, one clean tone." />
-          <Figure open={show.includes("car")} height={148} cref={refCar}
+          <Figure open={show.includes("car")} height={H.car} cref={refCar}
             caption="The carrier on its own. Fast, steady, empty." />
-          <Figure open={show.includes("mod")} height={248} cref={refMod}
+          <Figure open={show.includes("mod")} height={H.mod} cref={refMod}
             caption="Carrier and message combined. The dashed outline is the envelope." />
-          <Figure open={show.includes("spec")} height={216} cref={refSpec}
+          <Figure open={show.includes("spec")} height={H.spec} cref={refSpec}
             caption="What actually leaves the antenna, measured by FFT." />
-          <Figure open={show.includes("rec")} height={172} cref={refRec}
+          <Figure open={show.includes("rec")} height={H.rec} cref={refRec}
             caption="Rectify, low pass, drop the DC. Overlaid on the original." />
         </div>
       </div>
